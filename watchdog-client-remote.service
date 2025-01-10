@@ -1,0 +1,15 @@
+[Unit]
+Description=Watchdog Client Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/bin/watchdog-client --server-type gpu --server-addr http://222.19.236.142:7070/update --interval 9
+ExecReload=/usr/bin/watchdog-client --server-type gpu --server-addr http://222.19.236.142:7070/update --interval 9
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target

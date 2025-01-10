@@ -1,0 +1,15 @@
+[Unit]
+Description=Watchdog Client Service
+After=network.target
+
+[Service]
+Type=simple
+User=root
+Restart=on-failure
+RestartSec=5s
+ExecStart=/usr/bin/watchdog-server
+ExecReload=/usr/bin/watchdog-server
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
