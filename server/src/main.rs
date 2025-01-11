@@ -214,7 +214,7 @@ async fn info() -> impl Responder {
                 None => format!("{:.0} C", 0.0),
             };
 
-            let gpu_device = server_info.gpu.detail;
+            let gpu_device = server_info.gpu.details;
             let gpu_users = server_info.gpu.users;
             let mut gpu_name = String::new();
             let mut gpu_util = String::new();
