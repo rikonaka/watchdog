@@ -48,7 +48,7 @@ struct SingleCardDetail {
 
 #[derive(Deserialize, Serialize, Clone)]
 struct ServerCardsInfo {
-    detail: Vec<SingleCardDetail>,
+    details: Vec<SingleCardDetail>,
     users: Vec<String>,
 }
 
