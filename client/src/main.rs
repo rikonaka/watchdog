@@ -1,7 +1,8 @@
-use anyhow::Result;
 use chrono::DateTime;
 use chrono::Local;
 use clap::Parser;
+use log::error;
+use log::info;
 use reqwest;
 use serde::Serialize;
 use serde_json::json;
@@ -12,6 +13,13 @@ use std::time::Duration;
 use systemstat::saturating_sub_bytes;
 use systemstat::Platform;
 use systemstat::System;
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ClientError {
+    #[error("can not exec system command: {cmd}")]
+    ExecSystemCommandError { cmd: String },
+}
 
 /// Simple program to get server infomation
 #[derive(Parser, Debug)]
@@ -63,14 +71,14 @@ struct SingleCardDetail {
 impl SingleCardDetail {
     fn empty() -> SingleCardDetail {
         SingleCardDetail {
-            name: "".to_string(),
-            driver_version: "".to_string(),
-            temperature_gpu: "".to_string(),
-            utilization_gpu: "".to_string(),
-            utilization_memory: "".to_string(),
-            memory_total: "".to_string(),
-            memory_free: "".to_string(),
-            memory_used: "".to_string(),
+            name: String::new(),
+            driver_version: String::new(),
+            temperature_gpu: String::new(),
+            utilization_gpu: String::new(),
+            utilization_memory: String::new(),
+            memory_total: String::new(),
+            memory_free: String::new(),
+            memory_used: String::new(),
         }
     }
 }
@@ -84,36 +92,40 @@ struct ServerCardsInfo {
 impl ServerCardsInfo {
     fn empty() -> ServerCardsInfo {
         let detail = SingleCardDetail {
-            name: "".to_string(),
-            driver_version: "".to_string(),
-            temperature_gpu: "".to_string(),
-            utilization_gpu: "".to_string(),
-            utilization_memory: "".to_string(),
-            memory_total: "".to_string(),
-            memory_free: "".to_string(),
-            memory_used: "".to_string(),
+            name: String::new(),
+            driver_version: String::new(),
+            temperature_gpu: String::new(),
+            utilization_gpu: String::new(),
+            utilization_memory: String::new(),
+            memory_total: String::new(),
+            memory_free: String::new(),
+            memory_used: String::new(),
         };
         ServerCardsInfo {
             details: vec![detail],
-            users: vec!["null".to_string()],
+            users: vec![String::from("null")],
         }
     }
 }
 
-fn get_now_time() -> Option<String> {
+fn get_now_time() -> String {
     let local: DateTime<Local> = Local::now();
     let local_str = local.format("%Y-%m-%d %H:%M:%S").to_string();
-    Some(local_str)
+    local_str
 }
 
-fn command_system_pwdx(pid: String) -> Option<String> {
-    let pwdx_output = Command::new("pwdx")
-        .arg(pid)
-        .output()
-        .expect("failed to execute process");
+fn command_system_pwdx(pid: String) -> Result<String, ClientError> {
+    let pwdx_output = match Command::new("pwdx").arg(pid).output() {
+        Ok(p) => p,
+        Err(_) => {
+            return Err(ClientError::ExecSystemCommandError {
+                cmd: String::from("pwdx"),
+            })
+        }
+    };
     let pwdx_str = String::from_utf8_lossy(&pwdx_output.stdout);
     let pwdx_string = pwdx_str.to_string();
-    Some(pwdx_string.trim().to_string())
+    Ok(pwdx_string.trim().to_string())
 }
 
 fn split_gpu_users(nv_command_output: &str) -> Vec<String> {
@@ -144,7 +156,13 @@ fn split_gpu_users(nv_command_output: &str) -> Vec<String> {
                 let nct_2 = nct_1_vec[0];
                 let pid = nct_2.trim().to_string();
                 // path to script file
-                let pwdx = command_system_pwdx(pid).unwrap();
+                let pwdx = match command_system_pwdx(pid) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        error!("command_system_pwdx error: {}", e);
+                        String::new()
+                    }
+                };
                 gpu_users.push(pwdx);
             }
         }
@@ -159,9 +177,16 @@ enum CommandStatus {
     Failed,
 }
 
-fn command_gpu_users() -> Result<(Vec<String>, CommandStatus)> {
+fn command_gpu_users() -> Result<(Vec<String>, CommandStatus), ClientError> {
     // return ["no running processes found"] - 0
-    let nvidia_smi_output = Command::new("nvidia-smi").output()?;
+    let nvidia_smi_output = match Command::new("nvidia-smi").output() {
+        Ok(c) => c,
+        Err(_) => {
+            return Err(ClientError::ExecSystemCommandError {
+                cmd: String::from("nvidia-smi"),
+            })
+        }
+    };
     let nv_output = String::from_utf8_lossy(&nvidia_smi_output.stdout).to_string();
     let (gpu_users, status) =
         if nv_output.contains("Driver Version:") & nv_output.contains("CUDA Version:") {
@@ -176,14 +201,19 @@ fn command_gpu_users() -> Result<(Vec<String>, CommandStatus)> {
     Ok((gpu_users, status))
 }
 
-fn gpu_info() -> Result<ServerCardsInfo> {
+fn gpu_info() -> Result<ServerCardsInfo, ClientError> {
     // get users from nvidia-smi
     let (users, status) = command_gpu_users()?;
     let card_details = if status == CommandStatus::Success {
-        let nvidia_smi_query_output = Command::new("nvidia-smi")
-            .args(["--query-gpu=name,driver_version,temperature.gpu,utilization.gpu,utilization.memory,memory.total,memory.free,memory.used", "--format=csv,noheader"])
-            .output()
-            .expect("failed to execute process");
+        let cmd = vec!["--query-gpu=name,driver_version,temperature.gpu,utilization.gpu,utilization.memory,memory.total,memory.free,memory.used", "--format=csv,noheader"];
+        let nvidia_smi_query_output = match Command::new("nvidia-smi").args(cmd).output() {
+            Ok(c) => c,
+            Err(_) => {
+                return Err(ClientError::ExecSystemCommandError {
+                    cmd: String::from("nvidia-smi"),
+                })
+            }
+        };
         // single gpu
         // NVIDIA GeForce RTX 3090 Ti, 530.41.03, 36, 0 %, 0 %, 24564 MiB, 24247 MiB, 0 MiB
         // multi gpu
@@ -204,27 +234,27 @@ fn gpu_info() -> Result<ServerCardsInfo> {
                 let utilization_gpu = if split_line[3].trim().to_string().contains("%") {
                     split_line[3].trim().to_string()
                 } else {
-                    "Err".to_string()
+                    String::from("Err")
                 };
                 let utilization_memory = if split_line[4].trim().to_string().contains("%") {
                     split_line[4].trim().to_string()
                 } else {
-                    "Err".to_string()
+                    String::from("Err")
                 };
                 let memory_total = if split_line[5].trim().to_string().contains("MiB") {
                     split_line[5].trim().to_string()
                 } else {
-                    "Err".to_string()
+                    String::from("Err")
                 };
                 let memory_free = if split_line[6].trim().to_string().contains("MiB") {
                     split_line[6].trim().to_string()
                 } else {
-                    "Err".to_string()
+                    String::from("Err")
                 };
                 let memory_used = if split_line[7].trim().to_string().contains("MiB") {
                     split_line[7].trim().to_string()
                 } else {
-                    "Err".to_string()
+                    String::from("Err")
                 };
                 SingleCardDetail {
                     name,
@@ -249,14 +279,19 @@ fn gpu_info() -> Result<ServerCardsInfo> {
     })
 }
 
-fn hostname() -> Option<String> {
-    let hostname_output = Command::new("hostname")
-        .output()
-        .expect("failed to execute process");
+fn hostname() -> Result<String, ClientError> {
+    let hostname_output = match Command::new("hostname").output() {
+        Ok(c) => c,
+        Err(_) => {
+            return Err(ClientError::ExecSystemCommandError {
+                cmd: String::from("hostname"),
+            })
+        }
+    };
     // println!("{}", hostname_output.status);
     let hn_str = String::from_utf8_lossy(&hostname_output.stdout);
     let info = hn_str.trim();
-    Some(info.to_string())
+    Ok(info.to_string())
 }
 
 fn net_info() -> HashMap<String, String> {
@@ -276,7 +311,10 @@ fn net_info() -> HashMap<String, String> {
                                 _ => "null",
                             },
                         };
-                        let addrs_strip_2 = addrs_strip_1.strip_suffix(")").unwrap();
+                        let addrs_strip_2 = match addrs_strip_1.strip_suffix(")") {
+                            Some(a) => a,
+                            None => "",
+                        };
                         net_info_hm.insert(netif.name.to_string(), addrs_strip_2.to_string());
                     }
                 } else {
@@ -326,12 +364,16 @@ fn cpu_info() -> HashMap<String, f32> {
     match sys.cpu_load_aggregate() {
         Ok(cpu) => {
             thread::sleep(Duration::from_secs(1));
-            let cpu = cpu.done().unwrap();
-            cpu_info_hm.insert("user".to_string(), cpu.user);
-            cpu_info_hm.insert("nice".to_string(), cpu.nice);
-            cpu_info_hm.insert("system".to_string(), cpu.system);
-            cpu_info_hm.insert("interrupt".to_string(), cpu.interrupt);
-            cpu_info_hm.insert("idle".to_string(), cpu.idle);
+            match cpu.done() {
+                Ok(cpu) => {
+                    cpu_info_hm.insert("user".to_string(), cpu.user);
+                    cpu_info_hm.insert("nice".to_string(), cpu.nice);
+                    cpu_info_hm.insert("system".to_string(), cpu.system);
+                    cpu_info_hm.insert("interrupt".to_string(), cpu.interrupt);
+                    cpu_info_hm.insert("idle".to_string(), cpu.idle);
+                }
+                Err(e) => error!("get cpu error: {}", e),
+            };
         }
         Err(x) => println!("cpu_info error: {}", x),
     }
@@ -375,7 +417,7 @@ fn others_info() -> HashMap<String, String> {
         Err(x) => println!("uptime error: {}", x),
     }
 
-    others_info_hm.insert("nowtime".to_string(), get_now_time().unwrap());
+    others_info_hm.insert("nowtime".to_string(), get_now_time());
     /*
     match sys.boot_time() {
         Ok(boot_time) => {
@@ -388,19 +430,10 @@ fn others_info() -> HashMap<String, String> {
     others_info_hm
 }
 
-#[cfg(test)]
-mod tests {
-    // Note this useful idiom: importing names from outer (for mod tests) scope.
-    use super::*;
-    #[test]
-    fn test_command_gpu_users() {
-        let (ret, status) = command_gpu_users().unwrap();
-        println!("{:?} - {:?}", ret, status);
-    }
-}
-
 fn main() {
     if cfg!(target_os = "linux") {
+        pretty_env_logger::init();
+        info!("client is running...");
         let args = Args::parse();
         let server_info = MasterServerInfo::new("123456", &args.server_addr);
         let interval = args.interval;
@@ -410,7 +443,13 @@ fn main() {
             _ => false,
         };
         loop {
-            let hostname = hostname().unwrap();
+            let hostname = match hostname() {
+                Ok(h) => h,
+                Err(e) => {
+                    error!("get hostname error: {}", e);
+                    String::new()
+                }
+            };
             let net_info_result = net_info();
             let mem_info_result = mem_info();
             let swap_info_result = swap_info();
@@ -450,5 +489,16 @@ fn main() {
         panic!("not support running at windows system!");
     } else {
         panic!("unknown os type");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    // Note this useful idiom: importing names from outer (for mod tests) scope.
+    use super::*;
+    #[test]
+    fn test_command_gpu_users() {
+        let (ret, status) = command_gpu_users().unwrap();
+        println!("{:?} - {:?}", ret, status);
     }
 }

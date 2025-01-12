@@ -154,7 +154,6 @@ fn database_process(database: BTreeMap<String, ServerInfo>) -> BTreeMap<String, 
             } else if gpu_user.contains("driver failed") {
                 new_gpu_users.push("driver failed".to_string());
             } else {
-                // new_gpu_vec.push("".to_string());
                 new_gpu_users.push(gpu_user.to_string());
             }
         }
@@ -305,13 +304,13 @@ async fn info2() -> impl Responder {
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     pretty_env_logger::init();
-    info!("Web is running...");
+    info!("web is running...");
 
     let client = match redis::Client::open("redis://127.0.0.1/") {
         Ok(c) => c,
-        Err(e) => panic!("Connect to redis failed: {}", e),
+        Err(e) => panic!("connect to redis failed: {}", e),
     };
-    RD_CONNECTION.set(client).expect("Set RD_CONNECTION failed");
+    RD_CONNECTION.set(client).expect("set RD_CONNECTION failed");
 
     HttpServer::new(|| {
         let cors = Cors::default().allow_any_origin().send_wildcard();
